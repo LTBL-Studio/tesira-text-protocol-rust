@@ -1,6 +1,8 @@
 [package]
 name = "tesira-text-protocol"
 description = "Implementation of Tesira Text Protocol to communicate with biamp Tesira devices"
+author = "Baptiste Saclier <baptiste@plan-valley.com>"
+license = "MIT"
 version = "0.1.0"
 edition = "2024"
 
