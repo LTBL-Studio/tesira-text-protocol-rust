@@ -1,5 +1,5 @@
 [package]
-name = "rust-tesira-text-protocol"
+name = "tesira-text-protocol"
 description = "Implementation of Tesira Text Protocol to communicate with biamp Tesira devices"
 version = "0.1.0"
 edition = "2024"
