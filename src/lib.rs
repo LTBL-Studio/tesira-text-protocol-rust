@@ -5,7 +5,7 @@ use std::{collections::{hash_map::Entry, HashMap, HashSet}, io::{self, BufRead, 
 use crossbeam_channel::{Receiver, SendError, Sender};
 use thiserror::Error;
 
-use crate::proto::{Command, ErrResponse, GetAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, SubscribeCommand, Value};
+use crate::proto::{Command, DecrementAttributeCommand, ErrResponse, GetAttributeCommand, IncrementAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, SubscribeCommand, ToggleAttributeCommand, Value};
 
 pub mod proto;
 
@@ -108,6 +108,48 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
             attribute: attribute.into(),
             args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
         }))
+    }
+
+    pub fn toggle(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>
+    ) -> Result<(), Error> {
+        self.send_command(Command::Toggle(ToggleAttributeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
+        }))?;
+        Ok(())
+    }
+
+    pub fn increment(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>
+    ) -> Result<(), Error> {
+        self.send_command(Command::Increment(IncrementAttributeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
+        }))?;
+        Ok(())
+    }
+
+    pub fn decrement(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>
+    ) -> Result<(), Error> {
+        self.send_command(Command::Decrement(DecrementAttributeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
+        }))?;
+        Ok(())
     }
 
     /// Get all available aliases 

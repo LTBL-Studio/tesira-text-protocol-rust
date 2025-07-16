@@ -31,9 +31,9 @@ pub struct GetAttributeCommand {
 
 #[derive(Debug, Clone)]
 pub struct IncrementAttributeCommand {
-    instance_tag: InstanceTag,
-    attribute: String,
-    args: Vec<String>
+    pub instance_tag: InstanceTag,
+    pub attribute: String,
+    pub args: Vec<String>
 }
 
 #[derive(Debug, Clone)]
