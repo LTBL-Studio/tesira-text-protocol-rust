@@ -12,6 +12,9 @@ thiserror = "2.0"
 ssh2 = { version = "0.9.5", optional = true}
 crossbeam-channel = "0.5.15"
 
+[dev-dependencies]
+pretty_assertions = "1.4.1"
+
 [features]
 default = ["ssh"]
 ssh = ["dep:ssh2"]

@@ -1,5 +1,5 @@
 pub mod parser;
-use std::{fmt::Display, time::Duration};
+use std::{collections::HashMap, fmt::Display, time::Duration};
 use parser::parse_response;
 use thiserror::Error;
 
@@ -108,7 +108,10 @@ pub struct PublishToken {
 pub enum Value {
     Number(f64),
     Boolean(bool),
-    String(String)
+    String(String),
+    Map(HashMap<String, Value>),
+    Array(Vec<Value>),
+    Constant(String)
 }
 
 pub type InstanceTag = String;
@@ -120,7 +123,6 @@ impl Response {
             .map_err(|e| match e {
                 nom::Err::Error(e) | nom::Err::Failure(e) => Error::ParseError(e),
                 nom::Err::Incomplete(e) => {
-                    println!("STILL NEEDED {e:?}");
                     Error::UnexpectedEnd
                 }
             })
@@ -182,8 +184,10 @@ impl IntoTTP for Command {
     }
 }
 
+#[cfg(test)]
 mod test {
-    #[allow(unused_imports)]
+    use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
     use crate::proto::{Command, ErrResponse, GetAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, Value};
 
     #[test]
@@ -235,6 +239,92 @@ mod test {
     #[test]
     fn should_parse_ok_response_with_value() {
         assert_eq!(Response::parse_ttp("+OK \"value\":0.000000").unwrap(), Response::Ok(OkResponse::WithValue(Value::Number(0.0))));
+    }
+
+    #[test]
+    fn should_parse_ok_response_with_empty_string_value() {
+        assert_eq!(Response::parse_ttp("+OK \"value\":\"\"").unwrap(), Response::Ok(OkResponse::WithValue(Value::String("".to_owned()))));
+    }
+
+    #[test]
+    fn should_parse_ok_response_with_array_value() {
+
+        let expected_value = Value::Array(vec![
+            Value::Number(2.0),
+            Value::String("TesiraForte05953601".to_owned()),
+            Value::String("0.0.0.0".to_owned()),
+            Value::Boolean(true),
+            Value::Boolean(true),
+            Value::Boolean(false),
+            Value::Boolean(false),
+            Value::Boolean(false),
+            Value::Boolean(false),
+        ]);
+
+        assert_eq!(Response::parse_ttp("+OK \"value\":[2 \"TesiraForte05953601\" \"0.0.0.0\" true true false false false false]").unwrap(), Response::Ok(OkResponse::WithValue(expected_value)));
+    }
+
+    #[test]
+    fn should_parse_ok_response_with_map_value() {
+
+        let expected_value = Value::Map(HashMap::from([
+            ("schemaVersion".to_owned(), Value::Number(2.0)),
+            ("hostname".to_owned(), Value::String("TesiraForte05953601".to_owned())),
+            ("defaultGatewayStatus".to_owned(), Value::String("0.0.0.0".to_owned())),
+            ("mDNSEnabled".to_owned(), Value::Boolean(true)),
+            ("telnetDisabled".to_owned(), Value::Boolean(true)),
+            ("sshDisabled".to_owned(), Value::Boolean(false)),
+            ("rstpEnabled".to_owned(), Value::Boolean(false)),
+            ("httpsEnabled".to_owned(), Value::Boolean(false)),
+            ("igmpEnabled".to_owned(), Value::Boolean(false)),
+        ]));
+
+        assert_eq!(Response::parse_ttp("+OK \"value\":{\"schemaVersion\":2 \"hostname\":\"TesiraForte05953601\" \"defaultGatewayStatus\":\"0.0.0.0\" \"mDNSEnabled\":true \"telnetDisabled\":true \"sshDisabled\":false \"rstpEnabled\":false \"httpsEnabled\":false \"igmpEnabled\":false}").unwrap(), Response::Ok(OkResponse::WithValue(expected_value)));
+    }
+
+    #[test]
+    fn should_parse_ok_response_with_constant_value() {
+        assert_eq!(Response::parse_ttp("+OK \"value\":LINK_1_GB").unwrap(), Response::Ok(OkResponse::WithValue(Value::Constant("LINK_1_GB".to_owned()))));
+    }
+
+    #[test]
+    fn should_parse_ok_response_with_nested_value() {
+
+        let expected_value = Value::Map(HashMap::from([
+            ("schemaVersion".to_owned(), Value::Number(2.0)),
+            ("hostname".to_owned(), Value::String("TesiraForte05953601".to_owned())),
+            ("defaultGatewayStatus".to_owned(), Value::String("0.0.0.0".to_owned())),
+            ("networkInterfaceStatusWithName".to_owned(), Value::Array(vec![
+                Value::Map(HashMap::from([
+                    ("interfaceId".to_owned(), Value::String("control".to_owned())),
+                    ("networkInterfaceStatus".to_owned(), Value::Map(HashMap::from([
+                        ("macAddress".to_owned(), Value::String("78:45:01:3d:86:92".to_owned())),
+                        ("linkStatus".to_owned(), Value::Constant("LINK_1_GB".to_owned())),
+                        ("addressSource".to_owned(), Value::Constant("DHCP".to_owned())),
+                        ("ip".to_owned(), Value::String("10.0.151.235".to_owned())),
+                        ("netmask".to_owned(), Value::String("255.255.252.0".to_owned())),
+                        ("dhcpLeaseObtainedDate".to_owned(), Value::String("Wed Jun 26 16:45:27 UTC 2024".to_owned())),
+                        ("dhcpLeaseExpiresDate".to_owned(), Value::String("Thu Jun 27 16:45:27 UTC 2024".to_owned())),
+                        ("gateway".to_owned(), Value::String("10.0.148.1".to_owned())),
+                    ])))
+                ]))
+            ])),
+            ("dnsStatus".to_owned(), Value::Map(HashMap::from([
+                ("primaryDNSServer".to_owned(), Value::String("10.0.148.1".to_owned())),
+                ("secondaryDNSServer".to_owned(), Value::String("".to_owned())),
+                ("domainName".to_owned(), Value::String("".to_owned())),
+            ]))),
+            ("mDNSEnabled".to_owned(), Value::Boolean(true)),
+            ("telnetDisabled".to_owned(), Value::Boolean(true)),
+            ("sshDisabled".to_owned(), Value::Boolean(false)),
+            ("networkPortMode".to_owned(), Value::Constant("PORT_MODE_SEPARATE".to_owned())),
+            ("rstpEnabled".to_owned(), Value::Boolean(false)),
+            ("httpsEnabled".to_owned(), Value::Boolean(false)),
+            ("igmpEnabled".to_owned(), Value::Boolean(false)),
+            ("switchPortMode".to_owned(), Value::Constant("SWITCH_PORT_MODE_CONTROL_AND_MEDIA".to_owned())),
+        ]));
+
+        assert_eq!(Response::parse_ttp("+OK \"value\":{\"schemaVersion\":2 \"hostname\":\"TesiraForte05953601\" \"defaultGatewayStatus\":\"0.0.0.0\" \"networkInterfaceStatusWithName\":[{\"interfaceId\":\"control\" \"networkInterfaceStatus\":{\"macAddress\":\"78:45:01:3d:86:92\" \"linkStatus\":LINK_1_GB \"addressSource\":DHCP \"ip\":\"10.0.151.235\" \"netmask\":\"255.255.252.0\" \"dhcpLeaseObtainedDate\":\"Wed Jun 26 16:45:27 UTC 2024\" \"dhcpLeaseExpiresDate\":\"Thu Jun 27 16:45:27 UTC 2024\" \"gateway\":\"10.0.148.1\"}}] \"dnsStatus\":{\"primaryDNSServer\":\"10.0.148.1\" \"secondaryDNSServer\":\"\" \"domainName\":\"\"} \"mDNSEnabled\":true \"telnetDisabled\":true \"sshDisabled\":false \"networkPortMode\":PORT_MODE_SEPARATE \"rstpEnabled\":false \"httpsEnabled\":false \"igmpEnabled\":false \"switchPortMode\":SWITCH_PORT_MODE_CONTROL_AND_MEDIA}").unwrap(), Response::Ok(OkResponse::WithValue(expected_value)));
     }
 
     #[test]

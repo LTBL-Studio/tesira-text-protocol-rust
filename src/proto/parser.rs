@@ -1,4 +1,6 @@
-use nom::{branch::alt, bytes::complete::{is_not, tag, take_until, take_while1}, character::complete::space1, combinator::{opt, rest, value}, multi::separated_list0, sequence::{delimited, pair, preceded, terminated}, IResult, Parser};
+use std::collections::HashMap;
+
+use nom::{branch::alt, bytes::complete::{is_not, tag, take_until, take_while1}, character::complete::{alphanumeric1, space1}, combinator::{opt, rest, value}, multi::separated_list0, sequence::{delimited, pair, preceded, terminated}, AsChar, IResult, Parser};
 
 use super::{ErrResponse, OkResponse, PublishToken, Response, Value};
 
@@ -28,12 +30,33 @@ fn float_str(input: &str) -> IResult<&str, f64> {
     }).parse(input)
 }
 
+fn delimited_str(input: &str) -> IResult<&str, String> {
+    delimited(tag("\""), take_until("\""), tag("\"")).map(|it: &str| it.to_owned()).parse(input)
+}
+
 fn ttp_value(input: &str) -> IResult<&str, Value> {
     alt((
-        delimited(tag("\""), is_not("\""), tag("\"")).map(|it: &str| Value::String(it.to_owned())),
-        value(Value::Boolean(true), tag("true")),
-        value(Value::Boolean(false), tag("false")),
-        float_str.map(Value::Number)
+        delimited(tag("{"),
+            separated_list0(space1, pair(delimited(tag("\""), is_not("\""), tag("\":")), ttp_value)),
+        tag("}")).map(|it| {
+            Value::Map(HashMap::from_iter(it.into_iter().map(|it| (it.0.to_owned(), it.1))))
+        }), // Map
+
+        delimited(tag("["),
+            separated_list0(space1, ttp_value),
+        tag("]")).map(|it| {
+            Value::Array(it)
+        }), // Array
+
+        delimited_str.map(|it| Value::String(it)), // String
+        
+        value(Value::Boolean(true), tag("true")), // Boolean true
+        
+        value(Value::Boolean(false), tag("false")), // Boolean false
+        
+        float_str.map(Value::Number), // Floating point number
+
+        take_while1(|it: char| it.is_alphanumeric() || it == '_').map(|it: &str| Value::Constant(it.to_owned()))
     )).parse(input)
 }
 
@@ -76,7 +99,7 @@ fn err_response(input: &str) -> IResult<&str, ErrResponse> {
 
 fn publish_token_response(input: &str) -> IResult<&str, PublishToken> {
     let (input, (label, value)) = preceded(tag("! \"publishToken\":"), pair(
-        delimited(tag("\""), is_not("\""), tag("\"")),
+        delimited_str,
         preceded(space1, preceded(field("value"), alt((
             ttp_list_of_values,
             ttp_value.map(|v| vec![v])

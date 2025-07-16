@@ -26,7 +26,7 @@ fn main() {
     let aliases = session.get_aliases().unwrap();
     println!("Available aliases: {:#?}", aliases);
 
-    let subscription = session.subscribe_with_rate("AudioMeter1", "level", Some(1), Duration::from_secs(1))
+    let subscription = session.subscribe("AudioMeter1", "level", Some(1))
         .unwrap();
 
     println!("Subscribed to AudioMeter1 level 1");
