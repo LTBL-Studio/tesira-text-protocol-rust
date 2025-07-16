@@ -122,7 +122,7 @@ impl Response {
             .map(|it| it.1)
             .map_err(|e| match e {
                 nom::Err::Error(e) | nom::Err::Failure(e) => Error::ParseError(e),
-                nom::Err::Incomplete(e) => {
+                nom::Err::Incomplete(_e) => {
                     Error::UnexpectedEnd
                 }
             })
