@@ -1,4 +1,4 @@
-use std::{io::{stdin, stdout, BufRead, Write}, thread, time::Duration};
+use std::{io::{stdin, stdout, BufRead, Write}, thread};
 
 use tesira_text_protocol::TesiraSession;
 
