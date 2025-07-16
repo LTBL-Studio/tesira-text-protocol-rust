@@ -93,7 +93,6 @@ pub fn parse_response(input: &str) -> IResult<&str, Response> {
     alt((
         ok_response.map(Response::Ok),
         err_response.map(Response::Err),
-        terminated(publish_token_response, tag(" +OK")).map(|it| Response::Ok(OkResponse::WithPublishToken(it))),
         publish_token_response.map(Response::PublishToken)
     )).parse(input)
 }

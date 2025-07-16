@@ -1,3 +1,434 @@
 //#![warn(missing_docs)]
 
+use std::{collections::{hash_map::Entry, HashMap, HashSet}, io::{self, BufRead, BufReader, Read, Write}, time::Duration};
+
+use crossbeam_channel::{Receiver, SendError, Sender};
+use thiserror::Error;
+
+use crate::proto::{Command, ErrResponse, GetAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, SubscribeCommand, Value};
+
 pub mod proto;
+
+struct ChannelSubscription {
+    sender: Sender<PublishToken>,
+    subscription: SubscribeCommand
+}
+
+pub struct TesiraSession<R: Read, W: Write> {
+    read_stream: BufReader<R>,
+    write_stream: W,
+    next_channel_id: u64,
+    channels: HashMap<String, ChannelSubscription>
+}
+
+pub type TesiraSubscription = Receiver<PublishToken>;
+
+
+#[cfg(feature = "ssh")]
+struct SshPassword(String);
+
+#[cfg(feature = "ssh")]
+impl ssh2::KeyboardInteractivePrompt for SshPassword {
+    fn prompt<'a>(
+            &mut self,
+            _username: &str,
+            _instructions: &str,
+            _prompts: &[ssh2::Prompt<'a>],
+        ) -> Vec<String> {
+        return vec![self.0.to_owned()];
+    }
+}
+
+#[cfg(feature = "ssh")]
+impl TesiraSession<ssh2::Channel, ssh2::Channel> {
+
+    /// Connect to tesira device over SSH
+    pub fn new_from_ssh(hostname: String, username: String, password: String) -> Result<Self, Error> {
+        let connection = std::net::TcpStream::connect(hostname.as_str())?;
+
+        let mut ssh = ssh2::Session::new()?;
+        ssh.set_tcp_stream(connection);
+        ssh.handshake()?;
+        ssh.userauth_keyboard_interactive(&username, &mut SshPassword(password))?;
+
+        Self::new_from_ssh_session(&ssh)
+    }
+
+    /// Connect to tesira from an **established** and **authenticated** ssh session
+    /// It will create a new channel to communicate with device
+    pub fn new_from_ssh_session(session: &ssh2::Session) -> Result<Self, Error> {
+        let mut channel = session.channel_session()?;
+        channel.request_pty("ansi", None, None)?;
+        channel.shell()?;
+        Self::new_from_stream(channel.clone(), channel)
+    }
+}
+
+impl<R:Read, W: Write> TesiraSession<R, W> {
+    /// Create a new session from arbitrary read and write stream
+    /// 
+    /// See [TesiraSession::new_from_ssh] to use ssh
+    pub fn new_from_stream(read_strea: R, write_stream: W) -> Result<Self, Error> {
+        let mut new_self = Self {
+            read_stream: BufReader::new(read_strea),
+            write_stream,
+            next_channel_id: 0,
+            channels: HashMap::new()
+        };
+        let mut banner_buffer = String::new();
+        while !banner_buffer.starts_with("Welcome") { // Wait for welcome line
+            banner_buffer.clear();
+            new_self.read_stream.read_line(&mut banner_buffer)?;
+        }
+        Ok(new_self)
+    }
+
+    pub fn set(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>
+    ) -> Result<(), Error> {
+        self.send_command(Command::Set(SetAttributeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
+        }))?;
+        Ok(())
+    }
+
+    pub fn get(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        args: impl IntoIterator<Item = impl Into<String>>
+    ) -> Result<OkResponse, Error> {
+        self.send_command(Command::Get(GetAttributeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
+        }))
+    }
+
+    /// Get all available aliases 
+    pub fn get_aliases(&mut self) -> Result<HashSet<String>, Error> {
+        let response = self.send_command(Command::GetAliases)?;
+        if let OkResponse::WithList(l) = response {
+            return Ok(l.into_iter().filter_map(|it| {
+                match it {
+                    Value::String(v) => Some(v),
+                    _ => None
+                }
+            }).collect::<HashSet<_>>())
+        } else {
+            return Err(Error::UnexpectedResponse(Response::Ok(response), "a response with a list of aliases".to_owned()))
+        }
+    }
+
+    /// Subscribe to an attribute update and returns a channel that publish updates
+    /// Closing this channel will unsubscribe on device
+    /// 
+    /// You **MUST** handle token reception by calling [TesiraSession::dispatch_next_token] regularly
+    pub fn subscribe(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        index: Option<i32>
+    ) -> Result<TesiraSubscription, Error> {
+        self.subscribe_with_optinal_rate(instance_tag, attribute, index, None)
+    }
+
+    /// Subscribe to an attribute update with a minimum rate to avoid overrun
+    /// Returns a channel that publish updates
+    /// Closing this channel will unsubscribe on device
+    /// 
+    /// You **MUST** handle token reception by calling [TesiraSession::dispatch_next_token] regularly
+    pub fn subscribe_with_rate(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        index: Option<i32>,
+        rate: Duration
+    ) -> Result<TesiraSubscription, Error> {
+        self.subscribe_with_optinal_rate(instance_tag, attribute, index, Some(rate))
+    }
+
+    fn subscribe_with_optinal_rate(
+        &mut self,
+        instance_tag: impl Into<String>,
+        attribute: impl Into<String>,
+        index: Option<i32>,
+        rate: Option<Duration>
+    ) -> Result<TesiraSubscription, Error> {
+        let label = format!("Subscription{}", self.next_channel_id);
+        self.next_channel_id += 1;
+
+        let cmd = SubscribeCommand {
+            instance_tag: instance_tag.into(),
+            attribute: attribute.into(),
+            index: index,
+            label: Some(label.clone()),
+            minimum_rate: rate
+        };
+
+        let (sender, receiver) = crossbeam_channel::unbounded();
+        self.channels.insert(label.clone(), ChannelSubscription { sender, subscription: cmd.clone() });
+
+        let response = self.send_command(Command::Subscribe(cmd));
+
+        match response {
+            Ok(_) => return Ok(receiver),
+            Err(e) => {
+                self.channels.remove(&label);
+                return Err(e)
+            }
+        }
+    }
+
+    /// Send direct command and await for a response from device
+    /// 
+    /// See [TesiraSession::set], [TesiraSession::get], [TesiraSession::get_aliases] or [TesiraSession::subscribe]
+    pub fn send_command(&mut self, cmd: impl Into<Command>) -> Result<OkResponse, Error> {
+        let command: Command = cmd.into();
+        let cmd_str = format!("{}\n", command.into_ttp());
+        self.write_stream.write_all(&cmd_str.as_bytes())?;
+        loop {
+            let response = self.recv_response()?;
+            match response {
+                Response::Err(e) => return Err(Error::OperationFailed(e)),
+                Response::Ok(res) => return Ok(res),
+                Response::PublishToken(t) => self.dispatch_token(t),
+            }
+        }
+    }
+
+    fn recv_response(&mut self) -> Result<Response, Error> {
+        let mut buf = String::new();
+        loop { // Ignore empty lines
+            let byte_red = self.read_stream.read_line(&mut buf)?;
+            if byte_red == 0 {
+                return Err(Error::UnexpectedEnd);
+            }
+
+            let trim_buf = buf.trim();
+            if !trim_buf.is_empty() && (&trim_buf[0..1] == "-" || &trim_buf[0..1] == "+" || &trim_buf[0..1] == "!") {
+                return Ok(Response::parse_ttp(&buf)?);
+            } else {
+                buf.clear();
+            }
+        }
+    }
+
+    /// Await for a publish token to come
+    /// 
+    /// Please prefer usage of [TesiraSession::subscribe] and [TesiraSession::dispatch_next_token]
+    /// and use channels to receive PublishToken in a multithreaded environment
+    /// 
+    /// Use this method if you subscribed manually and wants to get all Publish tokens in one thread
+    pub fn recv_next_token(&mut self) -> Result<PublishToken, Error> {
+        let response = self.recv_response()?;
+        match response {
+            Response::PublishToken(t) => 
+                Ok(t),
+            r @ ( Response::Err(_) | Response::Ok(_) ) => 
+                Err(Error::UnexpectedResponse(r, "a publish token".to_owned())),
+        }
+    }
+
+    /// Await for next publish token and dispatch it over subscription channels
+    pub fn dispatch_next_token(&mut self) -> Result<(), Error> {
+        let next_token = self.recv_next_token()?;
+        self.dispatch_token(next_token);
+        Ok(())
+    }
+
+    fn dispatch_token(&mut self, token: PublishToken) {
+        let label = token.label.clone();
+        let Entry::Occupied(entry) = self.channels.entry(label.clone()) else {
+            return;
+        };
+
+        let result = entry.get().sender.send(token);
+        
+        if let Err(_) = result {
+            let value = entry.remove();
+            if let Err(e) = self.send_command(Command::Unsubscribe(value.subscription.into())) {
+                eprintln!("Failed to unsubscribe from {}: {}", label, e);
+            }
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum Error {
+    #[error("IO Error : {0}")]
+    IO(#[from] io::Error),
+    #[error("Operation failed on device : {0}")]
+    OperationFailed(ErrResponse),
+    #[error("Response parsing failed : {0}")]
+    ParsingFailed(String),
+    #[error("Unexpected response from device: {0:?} (expected {1})")]
+    UnexpectedResponse(Response, String),
+    #[error("Unexpected end of read stream")]
+    UnexpectedEnd,
+    #[error("Failed to dispatch publish token")]
+    DispatchFailed(#[from] SendError<PublishToken>),
+
+    #[cfg(feature = "ssh")]
+    #[error("SSH error: {0}")]
+    Ssh(#[from] ssh2::Error)
+}
+
+impl<'a> From<proto::Error<'a>> for Error {
+    fn from(value: proto::Error) -> Self {
+        Self::ParsingFailed(format!("{}", value))
+    }
+}
+
+mod test {
+    use std::{cell::LazyCell, collections::HashSet, io::{BufReader, BufWriter, Cursor, Write}};
+
+    use crossbeam_channel::TryRecvError;
+
+    use crate::{proto::{Command, ErrResponse, GetAttributeCommand, OkResponse, PublishToken, SetAttributeCommand, Value}, Error, TesiraSession};
+
+    const WELCOME_BANNER: LazyCell<Vec<u8>> = LazyCell::new(|| "Welcome to the Tesira Text Protocol Server...\n\n".as_bytes().to_vec());
+
+    #[test]
+    fn should_handle_valid_set_command(){
+        let write_c = Cursor::new(Vec::new());
+        let read_c = Cursor::new(WELCOME_BANNER.clone());
+        let mut session = TesiraSession::new_from_stream(read_c, write_c)
+            .unwrap();
+
+        session.read_stream.get_mut().get_mut().extend_from_slice("Level3 set level 2 0\n".as_bytes()); // Should also handle echo
+        session.read_stream.get_mut().get_mut().extend_from_slice("+OK\n".as_bytes());
+        session.set("Level3", "level", ["2", "0"]).unwrap();
+
+        assert_eq!(session.write_stream.into_inner(), "Level3 set level 2 0\n".as_bytes().to_vec());
+    }
+
+    #[test]
+    fn should_handle_valid_get_command(){
+        let write_c = Cursor::new(Vec::new());
+        let read_c = Cursor::new(WELCOME_BANNER.clone());
+
+        let mut session = TesiraSession::new_from_stream(read_c, write_c)
+            .unwrap();
+        
+        session.read_stream.get_mut().get_mut().extend_from_slice("Level3 get level 2\n".as_bytes()); // Should also handle echo
+        session.read_stream.get_mut().get_mut().extend_from_slice("+OK \"value\":0.000000\n".as_bytes());
+        let response = session.get("Level3", "level", ["2"]).unwrap();
+        
+        assert_eq!(session.write_stream.into_inner(), "Level3 get level 2\n".as_bytes().to_vec());
+        assert_eq!(response, OkResponse::WithValue(Value::Number(0.0)));
+    }
+
+    #[test]
+    fn should_handle_valid_get_aliases_command(){
+        let write_c = Cursor::new(Vec::new());
+        let read_c = Cursor::new(WELCOME_BANNER.clone());
+
+        let mut session = TesiraSession::new_from_stream(read_c, write_c)
+            .unwrap();
+        
+        session.read_stream.get_mut().get_mut().extend_from_slice("SESSION get aliases\n".as_bytes()); // Should also handle echo
+        session.read_stream.get_mut().get_mut().extend_from_slice("+OK \"list\":[\"AecInput1\" \"AudioMeter2\" \"AudioMeter4\" \"DEVICE\" \"DanteInput1\" \"DanteOutput1\" \"Level1\" \"Level2\" \"Level3\" \"Mixer1\" \"NoiseGenerator1\" \"Output1\" \"Router1\" \"ToneGenerator1\" \"ToneGenerator2\" \"USBInput1\" \"USBOutput1\"]\n".as_bytes());
+        let response = session.get_aliases().unwrap();
+        
+        assert_eq!(session.write_stream.into_inner(), "SESSION get aliases\n".as_bytes().to_vec());
+        assert_eq!(
+            response,
+            HashSet::from([
+                "AecInput1".to_owned(),
+                "AudioMeter2".to_owned(),
+                "AudioMeter4".to_owned(),
+                "DEVICE".to_owned(),
+                "DanteInput1".to_owned(),
+                "DanteOutput1".to_owned(),
+                "Level1".to_owned(),
+                "Level2".to_owned(),
+                "Level3".to_owned(),
+                "Mixer1".to_owned(),
+                "NoiseGenerator1".to_owned(),
+                "Output1".to_owned(),
+                "Router1".to_owned(),
+                "ToneGenerator1".to_owned(),
+                "ToneGenerator2".to_owned(),
+                "USBInput1".to_owned(),
+                "USBOutput1".to_owned()
+                ])
+            );
+    }
+
+    #[test]
+    fn should_handle_failed_operation(){
+        let write_c = Cursor::new(Vec::new());
+        let read_c = Cursor::new(WELCOME_BANNER.clone());
+
+        let mut session = TesiraSession::new_from_stream(read_c, write_c)
+            .unwrap();
+        
+        session.read_stream.get_mut().get_mut().extend_from_slice("Level3 set mute 3 true\n".as_bytes()); // Should also handle echo
+        session.read_stream.get_mut().get_mut().extend_from_slice("-ERR address not found: {\"deviceId\":0 \"classCode\":0 \"instanceNum\":0}\n".as_bytes());
+        let response = session.set("Level3", "mute", ["3", "true"]);
+
+        assert_eq!(session.write_stream.into_inner(), "Level3 set mute 3 true\n".as_bytes().to_vec());
+        
+        if let Err(Error::OperationFailed(e)) = response {
+            assert_eq!(e, ErrResponse{
+                message: "address not found: {\"deviceId\":0 \"classCode\":0 \"instanceNum\":0}".to_owned()
+            })
+        } else {
+            panic!("Unexpected response : {:?}", response)
+        }
+    }
+
+    #[test]
+    fn should_handle_subscription(){
+        let write_c = Cursor::new(Vec::new());
+        let read_c = Cursor::new(WELCOME_BANNER.clone());
+
+        let mut session = TesiraSession::new_from_stream(read_c, write_c)
+            .unwrap();
+        
+        session.read_stream.get_mut().get_mut().extend_from_slice("LogicMeter1 subscribe state 1 Subscription0\n".as_bytes());
+        session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":false\n".as_bytes());
+        session.read_stream.get_mut().get_mut().extend_from_slice("+OK\n".as_bytes());
+        let receiver = session.subscribe("LogicMeter1", "state", Some(1)).unwrap();
+
+        assert_eq!(*session.write_stream.get_ref(), "LogicMeter1 subscribe state 1 Subscription0\n".as_bytes().to_vec());
+
+        session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":true\n".as_bytes());
+        session.dispatch_next_token().unwrap();
+        session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":false\n".as_bytes());
+        session.dispatch_next_token().unwrap();
+
+        assert_eq!(receiver.try_recv(), Ok(PublishToken {
+            label: "Subscription0".to_owned(),
+            value: vec![Value::Boolean(false)]
+        }));
+
+        assert_eq!(receiver.try_recv(), Ok(PublishToken {
+            label: "Subscription0".to_owned(),
+            value: vec![Value::Boolean(true)]
+        }));
+
+        assert_eq!(receiver.try_recv(), Ok(PublishToken {
+            label: "Subscription0".to_owned(),
+            value: vec![Value::Boolean(false)]
+        }));
+
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+
+        session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":true\n".as_bytes());
+        session.dispatch_next_token().unwrap();
+
+        assert_eq!(receiver.try_recv(), Ok(PublishToken {
+            label: "Subscription0".to_owned(),
+            value: vec![Value::Boolean(true)]
+        }));
+
+        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+    }
+}

@@ -67,6 +67,11 @@ pub struct UnsubscribeCommand {
     pub label: Option<String>
 }
 
+impl From<SubscribeCommand> for UnsubscribeCommand {
+    fn from(value: SubscribeCommand) -> Self {
+        Self { instance_tag: value.instance_tag, attribute: value.attribute, index: value.index, label: value.label }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Response {
@@ -90,8 +95,7 @@ impl Display for ErrResponse {
 pub enum OkResponse {
     Ok,
     WithValue(Value),
-    WithList(Vec<Value>),
-    WithPublishToken(PublishToken),
+    WithList(Vec<Value>)
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -231,14 +235,6 @@ mod test {
     #[test]
     fn should_parse_ok_response_with_value() {
         assert_eq!(Response::parse_ttp("+OK \"value\":0.000000").unwrap(), Response::Ok(OkResponse::WithValue(Value::Number(0.0))));
-    }
-
-    #[test]
-    fn should_parse_ok_response_with_publish_token(){
-        assert_eq!(Response::parse_ttp("! \"publishToken\":\"MyLevel4CH1\" \"value\":6.000000 +OK").unwrap(), Response::Ok(OkResponse::WithPublishToken(PublishToken {
-            label: "MyLevel4CH1".to_owned(),
-            value: vec![Value::Number(6.0)]
-        })));
     }
 
     #[test]
