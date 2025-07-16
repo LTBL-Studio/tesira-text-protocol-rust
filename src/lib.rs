@@ -286,12 +286,16 @@ impl<'a> From<proto::Error<'a>> for Error {
 }
 
 mod test {
+    #[allow(unused_imports)]
     use std::{cell::LazyCell, collections::HashSet, io::{BufReader, BufWriter, Cursor, Write}};
 
+    #[allow(unused_imports)]
     use crossbeam_channel::TryRecvError;
 
+    #[allow(unused_imports)]
     use crate::{proto::{Command, ErrResponse, GetAttributeCommand, OkResponse, PublishToken, SetAttributeCommand, Value}, Error, TesiraSession};
-
+    
+    #[allow(dead_code)]
     const WELCOME_BANNER: LazyCell<Vec<u8>> = LazyCell::new(|| "Welcome to the Tesira Text Protocol Server...\n\n".as_bytes().to_vec());
 
     #[test]
