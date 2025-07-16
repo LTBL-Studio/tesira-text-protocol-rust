@@ -42,9 +42,7 @@ fn ttp_value(input: &str) -> IResult<&str, Value> {
             Value::Map(HashMap::from_iter(it.into_iter().map(|it| (it.0.to_owned(), it.1))))
         }), // Map
 
-        delimited(tag("["),
-            separated_list0(space1, ttp_value),
-        tag("]")).map(|it| {
+        ttp_list_of_values.map(|it| {
             Value::Array(it)
         }), // Array
 
@@ -100,10 +98,7 @@ fn err_response(input: &str) -> IResult<&str, ErrResponse> {
 fn publish_token_response(input: &str) -> IResult<&str, PublishToken> {
     let (input, (label, value)) = preceded(tag("! \"publishToken\":"), pair(
         delimited_str,
-        preceded(space1, preceded(field("value"), alt((
-            ttp_list_of_values,
-            ttp_value.map(|v| vec![v])
-        ))))
+        preceded(space1, preceded(field("value"), ttp_value))
     )).parse(input)?;
     
     Ok((input, PublishToken {

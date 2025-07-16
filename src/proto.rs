@@ -101,7 +101,7 @@ pub enum OkResponse {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublishToken {
     pub label: String,
-    pub value: Vec<Value>
+    pub value: Value
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -354,16 +354,16 @@ mod test {
     fn should_parse_publish_token() {
         assert_eq!(Response::parse_ttp("! \"publishToken\":\"MyLevel4CH1\" \"value\":6.000000").unwrap(), Response::PublishToken(PublishToken {
             label: "MyLevel4CH1".to_owned(),
-            value: vec![Value::Number(6.0)]
+            value: Value::Number(6.0)
         }));
         assert_eq!(Response::parse_ttp("! \"publishToken\":\"MyLevel4ALL\" \"value\":[5.200000 3.000000 -10.000000 -60.000000]").unwrap(), Response::PublishToken(PublishToken {
             label: "MyLevel4ALL".to_owned(),
-            value: vec![
+            value: Value::Array(vec![
                 Value::Number(5.2),
                 Value::Number(3.0),
                 Value::Number(-10.0),
                 Value::Number(-60.0)
-            ]
+            ])
         }));
     }
 

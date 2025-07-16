@@ -410,17 +410,17 @@ mod test {
 
         assert_eq!(receiver.try_recv(), Ok(PublishToken {
             label: "Subscription0".to_owned(),
-            value: vec![Value::Boolean(false)]
+            value: Value::Boolean(false)
         }));
 
         assert_eq!(receiver.try_recv(), Ok(PublishToken {
             label: "Subscription0".to_owned(),
-            value: vec![Value::Boolean(true)]
+            value: Value::Boolean(true)
         }));
 
         assert_eq!(receiver.try_recv(), Ok(PublishToken {
             label: "Subscription0".to_owned(),
-            value: vec![Value::Boolean(false)]
+            value: Value::Boolean(false)
         }));
 
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
@@ -430,7 +430,7 @@ mod test {
 
         assert_eq!(receiver.try_recv(), Ok(PublishToken {
             label: "Subscription0".to_owned(),
-            value: vec![Value::Boolean(true)]
+            value: Value::Boolean(true)
         }));
 
         assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
