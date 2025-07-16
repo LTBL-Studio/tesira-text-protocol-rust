@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use nom::{branch::alt, bytes::complete::{is_not, tag, take_until, take_while1}, character::complete::{alphanumeric1, space1}, combinator::{opt, rest, value}, multi::separated_list0, sequence::{delimited, pair, preceded, terminated}, AsChar, IResult, Parser};
+use nom::{branch::alt, bytes::complete::{is_not, tag, take_until, take_while1}, character::complete::space1, combinator::{opt, rest, value}, multi::separated_list0, sequence::{delimited, pair, preceded, terminated}, IResult, Parser};
 
 use super::{ErrResponse, OkResponse, PublishToken, Response, Value};
 
