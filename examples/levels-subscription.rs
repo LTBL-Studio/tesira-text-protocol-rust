@@ -27,7 +27,9 @@ fn main() {
     println!("Available aliases: {:#?}", aliases);
 
     session.send_command(
-        Command::new_subscribe("AudioMeter1", "level", [1], "MySubscription")
+        Command::builder()
+                .audio_meter("AudioMeter1")
+                .subscribe_level(1, "MySubscription")
     ).unwrap();
 
     println!("Subscribed to AudioMeter1 level 1");

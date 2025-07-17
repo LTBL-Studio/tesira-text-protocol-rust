@@ -1,3 +1,5 @@
+//! Parsers for Tesira Text Protocol responses and values
+
 use std::collections::HashMap;
 
 use nom::{branch::alt, bytes::complete::{is_not, tag, take_until, take_while1}, character::complete::space1, combinator::{opt, rest, value}, multi::separated_list0, sequence::{delimited, pair, preceded, terminated}, IResult, Parser};
@@ -107,6 +109,8 @@ fn publish_token_response(input: &str) -> IResult<&str, PublishToken> {
     }))
 }
 
+
+/// Parse Tesira Text Protocol response
 pub fn parse_response(input: &str) -> IResult<&str, Response> {
     alt((
         ok_response.map(Response::Ok),

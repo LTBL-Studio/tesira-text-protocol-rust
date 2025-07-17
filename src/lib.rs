@@ -2,9 +2,11 @@
 #![doc = include_str!("../README.md")]
 
 pub mod proto;
-//#![warn(missing_docs)]
+pub mod builder;
 
 pub use proto::Command;
+pub use chrono::naive::NaiveDateTime;
+pub use builder::CommandBuilder;
 
 use std::{collections::{HashSet, VecDeque}, io::{self, BufRead, BufReader, Read, Write}};
 
@@ -12,6 +14,7 @@ use thiserror::Error;
 
 use crate::proto::{ErrResponse, IntoTTP, OkResponse, PublishToken, Response, Value};
 
+/// Follows an active Tesira Text Protocol session
 pub struct TesiraSession<R: Read, W: Write> {
     read_stream: BufReader<R>,
     write_stream: W,
@@ -78,7 +81,7 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
 
     /// Get all available aliases 
     pub fn get_aliases(&mut self) -> Result<HashSet<String>, Error> {
-        let response = self.send_command(Command::new_get("SESSION", "aliases", []))?;
+        let response = self.send_command(Command::builder().session().aliases())?;
         if let OkResponse::WithList(l) = response {
             return Ok(l.into_iter().filter_map(|it| {
                 match it {
@@ -146,20 +149,27 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
     }
 }
 
+/// Error that can occur when interacting with Tesira sessions
 #[derive(Debug, Error)]
 pub enum Error {
+    /// IO Error on streams
     #[error("IO Error : {0}")]
     IO(#[from] io::Error),
+    /// Received an Error response
     #[error("Operation failed on device : {0}")]
     OperationFailed(ErrResponse),
+    /// Failed to parse response send by device
     #[error("Response parsing failed : {0}")]
     ParsingFailed(String),
+    /// Response sent by device wasn't expected
     #[error("Unexpected response from device: {0:?} (expected {1})")]
     UnexpectedResponse(Response, String),
+    /// Stream ends before end of response
     #[error("Unexpected end of read stream")]
     UnexpectedEnd,
     #[cfg(feature = "ssh")]
     #[error("SSH error: {0}")]
+    /// SSH error
     Ssh(#[from] ssh2::Error)
 }
 

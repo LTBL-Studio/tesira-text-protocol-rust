@@ -6,18 +6,31 @@ pub mod commands;
 use std::{collections::HashMap, fmt::Display, time::Duration};
 use parser::parse_response;
 use thiserror::Error;
+use chrono::{naive::NaiveDateTime, Datelike};
+
+use crate::builder::CommandBuilder;
 
 /// Name of block a command can operate on
 pub type InstanceTag = String;
 
+/// Value of an index
+pub type IndexValue = u64;
+
 /// A client command that can be sent to device
 #[derive(Debug, Clone)]
 pub struct Command<'a> {
-    instance_tag: InstanceTag,
-    command: &'a str,
-    attribute: &'a str,
-    indexes: Vec<u64>,
-    values: Vec<String>
+    /// Block instance name to apply command on
+    pub instance_tag: InstanceTag,
+    /// Command string to trigger
+    /// 
+    /// See [commands] module for predefined command strings
+    pub command: &'a str,
+    /// Attribute to apply command on
+    pub attribute: &'a str,
+    /// Optional indexes to specify command target
+    pub indexes: Vec<IndexValue>,
+    /// Optional values to add at command end
+    pub values: Vec<String>
 }
 
 /// Conversion trait to Tesira Text Protocol
@@ -27,8 +40,14 @@ pub trait IntoTTP {
 }
 
 impl<'a> Command<'a> {
+
+    /// Get a builder to construct valid commands
+    pub fn builder() -> CommandBuilder {
+        CommandBuilder
+    }
+
     /// Create a new "get" command
-    pub fn new_get(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>) -> Self {
+    pub fn new_get(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_GET,
@@ -39,7 +58,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "set" command
-    pub fn new_set(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, value: impl IntoTTP) -> Self {
+    pub fn new_set(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, value: impl IntoTTP) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_SET,
@@ -50,7 +69,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "increment" command
-    pub fn new_increment(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, amount: impl IntoTTP) -> Self {
+    pub fn new_increment(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, amount: impl IntoTTP) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_INCREMENT,
@@ -61,7 +80,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "decrement" command
-    pub fn new_decrement(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, amount: impl IntoTTP) -> Self {
+    pub fn new_decrement(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, amount: impl IntoTTP) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_DECREMENT,
@@ -72,7 +91,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "subscribe" command
-    pub fn new_subscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>) -> Self {
+    pub fn new_subscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, identifier: impl Into<String>) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_SUBSCRIBE,
@@ -83,7 +102,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "subscribe" command with a minimum rate
-    pub fn new_subscribe_with_rate(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>, rate: Duration) -> Self {
+    pub fn new_subscribe_with_rate(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, identifier: impl Into<String>, rate: Duration) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_SUBSCRIBE,
@@ -94,7 +113,7 @@ impl<'a> Command<'a> {
     }
 
     /// Create a new "unsubscribe" command
-    pub fn new_unsubscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>) -> Self {
+    pub fn new_unsubscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<IndexValue>>, identifier: impl Into<String>) -> Self {
         Command {
             instance_tag: instance_tag.into(),
             command: commands::COMMAND_UNSUBSCRIBE,
@@ -155,6 +174,24 @@ impl IntoTTP for i32 {
 impl IntoTTP for u128 {
     fn into_ttp(self) -> String {
         self.to_string()
+    }
+}
+
+impl IntoTTP for u64 {
+    fn into_ttp(self) -> String {
+        self.to_string()
+    }
+}
+
+impl IntoTTP for f64 {
+    fn into_ttp(self) -> String {
+        self.to_string()
+    }
+}
+
+impl IntoTTP for NaiveDateTime {
+    fn into_ttp(self) -> String {
+        format!("\"{}:{}:{}\"", self.format("%H:%M:%S"), self.month(), self.format("%d:%Y"))
     }
 }
 
@@ -248,6 +285,7 @@ pub enum Error<'a> {
 mod test {
     use std::collections::HashMap;
 
+    use chrono::NaiveDateTime;
     use pretty_assertions::assert_eq;
     use crate::proto::ErrResponse;
     use crate::proto::OkResponse;
@@ -257,6 +295,14 @@ mod test {
 
     use super::IntoTTP;
     use super::Command;
+
+    #[test]
+    fn should_serialize_date(){
+        assert_eq!(
+            NaiveDateTime::parse_from_str("2025-06-01T12:56:43.000Z", "%+").unwrap().into_ttp(),
+            "\"12:56:43:6:01:2025\""
+        )
+    }
     
     #[test]
     fn should_serialize_get_alias_command() {

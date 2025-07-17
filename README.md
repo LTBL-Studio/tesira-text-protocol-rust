@@ -17,37 +17,52 @@ let mut session = TesiraSession::new_from_ssh("192.168.1.14", "admin", "mystrong
 let aliases = session.get_aliases().unwrap();
 println!("Available aliases: {:#?}", aliases);
 
-session.set("Mixer1", "outputLevel", ["1", "-10"])
-    .expect("Failed to set level")
+session.send_command(
+    Command::builder()
+        .standard_mixer("Mixer1")
+        .set_outputlevel(1, -10)
+).expect("Failed to set level")
 ```
 
 ### Value subscription
-
-TesiraSession is designed to allow multithreaded application to monitor values from a single connection.
-Call to `subscribe` returns a channel that dispatch values updates.
 
 ```rust
 let mut session = TesiraSession::new_from_ssh("192.168.1.14", "admin", "mystrongpassword")
         .expect("Failed to open Tesira session");
 
-let subscription = session.subscribe("AudioMeter1", "level", Some(1))
+let subscription = session.send_command()
     .unwrap();
 
-thread::spawn(move || {
-    loop {
-        match subscription.recv() {
-            Err(e) => {
-                println!("Channel closed: {e}");
-                break;
-            },
-            Ok(t) => println!("Value received: {:?}", t.value)
-        }
-    }
-});
+session.send_command(
+    Command::builder()
+            .audio_meter("AudioMeter1")
+            .subscribe_level(1, "MySubscription")
+).unwrap();
 
 loop {
-    // You still need to call "dispatch_next_token" regularly
-    session.dispatch_next_token()
-        .unwrap()
+    let token = session.recv_token().unwrap();
+    println!("Value received: {:?}", token.value)
 }
+```
+
+## Development
+
+To update block type list from tesira command generator execute the following code and replace `tesira-blocks.json` with downloaded one.
+
+```javascript
+(() => {
+    let cleanedBlocks = Object.fromEntries(Object.entries(blocks))
+    for(let key in cleanedBlocks){
+        for(let attr of cleanedBlocks[key].attributes){
+            if(!attr.valuetype){
+                attr.valuetype = "none"
+            }
+        }
+    }
+
+    let a = document.createElement("a")
+    a.href = `data:application/json,${JSON.stringify(cleanedBlocks)}`
+    a.download = "tesira-blocks.json"
+    a.click()
+})()
 ```
