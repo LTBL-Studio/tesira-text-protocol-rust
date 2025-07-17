@@ -1,87 +1,178 @@
+//! Implementation of protcol commands and basic blocs
+
 pub mod parser;
+pub mod commands;
+
 use std::{collections::HashMap, fmt::Display, time::Duration};
 use parser::parse_response;
 use thiserror::Error;
 
+/// Name of block a command can operate on
+pub type InstanceTag = String;
+
+/// A client command that can be sent to device
 #[derive(Debug, Clone)]
-pub enum Command {
-    GetAliases,
-    Set(SetAttributeCommand),
-    Get(GetAttributeCommand),
-    Increment(IncrementAttributeCommand),
-    Decrement(DecrementAttributeCommand),
-    Toggle(ToggleAttributeCommand),
-    Subscribe(SubscribeCommand),
-    Unsubscribe(UnsubscribeCommand)
+pub struct Command<'a> {
+    instance_tag: InstanceTag,
+    command: &'a str,
+    attribute: &'a str,
+    indexes: Vec<u64>,
+    values: Vec<String>
 }
 
-#[derive(Debug, Clone)]
-pub struct SetAttributeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub args: Vec<String>
+/// Conversion trait to Tesira Text Protocol
+pub trait IntoTTP {
+    /// Convert this type to Tesira Text Protocol value
+    fn into_ttp(self) -> String;
 }
 
-#[derive(Debug, Clone)]
-pub struct GetAttributeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub args: Vec<String>
-}
+impl<'a> Command<'a> {
+    /// Create a new "get" command
+    pub fn new_get(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_GET,
+            attribute,
+            indexes: indexes.into(),
+            values: Vec::new()
+        }
+    }
 
-#[derive(Debug, Clone)]
-pub struct IncrementAttributeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub args: Vec<String>
-}
+    /// Create a new "set" command
+    pub fn new_set(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, value: impl IntoTTP) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_SET,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![value.into_ttp()]
+        }
+    }
 
-#[derive(Debug, Clone)]
-pub struct DecrementAttributeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub args: Vec<String>
-}
+    /// Create a new "increment" command
+    pub fn new_increment(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, amount: impl IntoTTP) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_INCREMENT,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![amount.into_ttp()]
+        }
+    }
 
-#[derive(Debug, Clone)]
-pub struct ToggleAttributeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub args: Vec<String>
-}
+    /// Create a new "decrement" command
+    pub fn new_decrement(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, amount: impl IntoTTP) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_DECREMENT,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![amount.into_ttp()]
+        }
+    }
 
-#[derive(Debug, Clone)]
-pub struct SubscribeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub index: Option<i32>,
-    pub label: Option<String>,
-    pub minimum_rate: Option<Duration>
-}
+    /// Create a new "subscribe" command
+    pub fn new_subscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_SUBSCRIBE,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![identifier.into().into_ttp()]
+        }
+    }
 
-#[derive(Debug, Clone)]
-pub struct UnsubscribeCommand {
-    pub instance_tag: InstanceTag,
-    pub attribute: String,
-    pub index: Option<i32>,
-    pub label: Option<String>
-}
+    /// Create a new "subscribe" command with a minimum rate
+    pub fn new_subscribe_with_rate(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>, rate: Duration) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_SUBSCRIBE,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![identifier.into().into_ttp(), rate.as_millis().into_ttp()]
+        }
+    }
 
-impl From<SubscribeCommand> for UnsubscribeCommand {
-    fn from(value: SubscribeCommand) -> Self {
-        Self { instance_tag: value.instance_tag, attribute: value.attribute, index: value.index, label: value.label }
+    /// Create a new "unsubscribe" command
+    pub fn new_unsubscribe(instance_tag: impl Into<String>, attribute: &'a str, indexes: impl Into<Vec<u64>>, identifier: impl Into<String>) -> Self {
+        Command {
+            instance_tag: instance_tag.into(),
+            command: commands::COMMAND_UNSUBSCRIBE,
+            attribute,
+            indexes: indexes.into(),
+            values: vec![identifier.into().into_ttp()]
+        }
     }
 }
 
+impl<'a> IntoTTP for Command<'a> {
+    fn into_ttp(self) -> String {
+        let mut cmd_ttp = format!("{} {} {}", self.instance_tag, self.command, self.attribute); // [instance tag] [command str] [attribute str]
+
+        if !self.indexes.is_empty() {
+            cmd_ttp.push_str(" ");
+            cmd_ttp.push_str(
+                self.indexes.into_iter()
+                    .map(|it| it.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ").as_str()
+                ); // [indexes...]
+        }
+
+        if !self.values.is_empty() {
+            cmd_ttp.push_str(" ");
+            cmd_ttp.push_str(
+                self.values
+                    .join(" ").as_str()
+                ); // [values...]
+        }
+
+        cmd_ttp
+    }
+}
+
+impl IntoTTP for String {
+    fn into_ttp(self) -> String {
+        self
+    }
+}
+
+impl IntoTTP for bool {
+    fn into_ttp(self) -> String {
+        match self {
+            true => "true".to_owned(),
+            false => "false".to_owned()
+        }
+    }
+}
+
+impl IntoTTP for i32 {
+    fn into_ttp(self) -> String {
+        self.to_string()
+    }
+}
+
+impl IntoTTP for u128 {
+    fn into_ttp(self) -> String {
+        self.to_string()
+    }
+}
+
+/// A response from device to a command
 #[derive(Debug, Clone, PartialEq)]
 pub enum Response {
+    /// Command was executed and returned a positive response
     Ok(OkResponse),
+    /// An error occured during command execution
     Err(ErrResponse),
+    /// A value update for a subscription
     PublishToken(PublishToken)
 }
 
+/// An error produced by device in response to a command
 #[derive(Debug, Clone, PartialEq)]
 pub struct ErrResponse {
+    /// Device message decribing the error
     pub message: String
 }
 
@@ -91,32 +182,45 @@ impl Display for ErrResponse {
     }
 }
 
+/// A positive response to a command
 #[derive(Debug, Clone, PartialEq)]
 pub enum OkResponse {
+    /// Everything Ok, no more information
     Ok,
+    /// A value was provided in return to command
     WithValue(Value),
+    /// A list of values was provided in return to command
     WithList(Vec<Value>)
 }
 
+/// A value update of a subscription
 #[derive(Debug, Clone, PartialEq)]
 pub struct PublishToken {
+    /// Subscription identifier
     pub label: String,
+    /// Value updated
     pub value: Value
 }
 
+/// A structured value from Tesira devices
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// A floating point number
     Number(f64),
+    /// A boolean value
     Boolean(bool),
+    /// Any string value
     String(String),
+    /// A JSON-like object key-value map
     Map(HashMap<String, Value>),
+    /// A sequence of heterogenous values
     Array(Vec<Value>),
+    /// A constant value described by a string such as "DHCP", "LINK_1_GB", etc.
     Constant(String)
 }
 
-pub type InstanceTag = String;
-
 impl Response {
+    /// Parse ttp string into response
     pub fn parse_ttp(source: &str) -> Result<Self, Error> {
         parse_response(source)
             .map(|it| it.1)
@@ -129,106 +233,46 @@ impl Response {
     }
 }
 
+/// A parsing error of response
 #[derive(Debug, Error)]
 pub enum Error<'a> {
+    /// Error while parsing response
     #[error("Response parse error: {0}")]
     ParseError(nom::error::Error<&'a str>),
+    /// More data is required to complete response parsing
     #[error("Unexpected end of input")]
     UnexpectedEnd
 }
 
-pub trait IntoTTP {
-    fn into_ttp(self) -> String;
-}
-
-impl IntoTTP for Command {
-    fn into_ttp(self) -> String {
-        match self {
-            Command::GetAliases => "SESSION get aliases".to_owned(),
-            Command::Set(cmd) => format!("{} set {} {}", cmd.instance_tag, cmd.attribute, cmd.args.join(" ")),
-            Command::Get(cmd) => format!("{} get {} {}", cmd.instance_tag, cmd.attribute, cmd.args.join(" ")),
-            Command::Increment(cmd) => format!("{} increment {} {}", cmd.instance_tag, cmd.attribute, cmd.args.join(" ")),
-            Command::Decrement(cmd) => format!("{} decrement {} {}", cmd.instance_tag, cmd.attribute, cmd.args.join(" ")),
-            Command::Toggle(cmd) => format!("{} toggle {} {}", cmd.instance_tag, cmd.attribute, cmd.args.join(" ")),
-            Command::Subscribe(cmd) => {
-                let mut result = format!("{} subscribe {}", cmd.instance_tag, cmd.attribute);
-                
-                if let Some(index) = cmd.index {
-                    result = format!("{result} {}", index);
-                }
-
-                if let Some(label) = cmd.label {
-                    result = format!("{result} {}", label)
-                }
-
-                if let Some(value) = cmd.minimum_rate {
-                    result = format!("{result} {}", value.as_millis())
-                }
-
-                result
-            }
-            Command::Unsubscribe(cmd) => {
-                let mut result = format!("{} unsubscribe {}", cmd.instance_tag, cmd.attribute);
-                
-                if let Some(index) = cmd.index {
-                    result = format!("{result} {}", index);
-                }
-
-                if let Some(label) = cmd.label {
-                    result = format!("{result} {}", label)
-                }
-
-                result
-            }
-        }
-    }
-}
-
 #[cfg(test)]
 mod test {
-    use pretty_assertions::assert_eq;
     use std::collections::HashMap;
-    use crate::proto::{Command, ErrResponse, GetAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, Value};
 
+    use pretty_assertions::assert_eq;
+    use crate::proto::ErrResponse;
+    use crate::proto::OkResponse;
+    use crate::proto::PublishToken;
+    use crate::proto::Response;
+    use crate::proto::Value;
+
+    use super::IntoTTP;
+    use super::Command;
+    
     #[test]
     fn should_serialize_get_alias_command() {
-        assert_eq!(Command::GetAliases.into_ttp(), "SESSION get aliases");
+        assert_eq!(Command::new_get("SESSION", "aliases", []).into_ttp(), "SESSION get aliases");
     }
 
     #[test]
     fn should_serialize_get_command() {
-        assert_eq!(
-            Command::Get(GetAttributeCommand {
-                instance_tag: "Level3".to_owned(),
-                attribute: "level".to_owned(),
-                args: vec!["2".to_owned()]
-            }).into_ttp(),
-            "Level3 get level 2");
+        assert_eq!(Command::new_get("Level3", "level", [2]).into_ttp(), "Level3 get level 2");
     }
 
     #[test]
     fn should_serialize_set_command() {
-        assert_eq!(
-            Command::Set(SetAttributeCommand {
-                instance_tag: "level3".to_owned(),
-                attribute: "mute".to_owned(),
-                args: vec![
-                    "3".to_owned(),
-                    "true".to_owned()
-                ]
-            }).into_ttp(),
-            "level3 set mute 3 true");
+        assert_eq!(Command::new_set("level3", "mute", [3], true).into_ttp(), "level3 set mute 3 true");
 
-        assert_eq!(
-            Command::Set(SetAttributeCommand {
-                instance_tag: "level3".to_owned(),
-                attribute: "mute".to_owned(),
-                args: vec![
-                    "0".to_owned(),
-                    "true".to_owned()
-                ]
-            }).into_ttp(),
-            "level3 set mute 0 true");
+        assert_eq!(Command::new_set("level3", "mute", [0], true).into_ttp(), "level3 set mute 0 true");
     }
 
     #[test]

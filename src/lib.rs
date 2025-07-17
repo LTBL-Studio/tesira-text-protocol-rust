@@ -1,28 +1,22 @@
-//#![warn(missing_docs)]
-
-use std::{collections::{hash_map::Entry, HashMap, HashSet}, io::{self, BufRead, BufReader, Read, Write}, time::Duration};
-
-use crossbeam_channel::{Receiver, SendError, Sender};
-use thiserror::Error;
-
-use crate::proto::{Command, DecrementAttributeCommand, ErrResponse, GetAttributeCommand, IncrementAttributeCommand, IntoTTP, OkResponse, PublishToken, Response, SetAttributeCommand, SubscribeCommand, ToggleAttributeCommand, Value};
+#![warn(missing_docs)]
+#![doc = include_str!("../README.md")]
 
 pub mod proto;
+//#![warn(missing_docs)]
 
-struct ChannelSubscription {
-    sender: Sender<PublishToken>,
-    subscription: SubscribeCommand
-}
+pub use proto::Command;
+
+use std::{collections::{HashSet, VecDeque}, io::{self, BufRead, BufReader, Read, Write}};
+
+use thiserror::Error;
+
+use crate::proto::{ErrResponse, IntoTTP, OkResponse, PublishToken, Response, Value};
 
 pub struct TesiraSession<R: Read, W: Write> {
     read_stream: BufReader<R>,
     write_stream: W,
-    next_channel_id: u64,
-    channels: HashMap<String, ChannelSubscription>
+    pending_token: VecDeque<PublishToken>
 }
-
-pub type TesiraSubscription = Receiver<PublishToken>;
-
 
 #[cfg(feature = "ssh")]
 struct SshPassword(String);
@@ -72,8 +66,7 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
         let mut new_self = Self {
             read_stream: BufReader::new(read_strea),
             write_stream,
-            next_channel_id: 0,
-            channels: HashMap::new()
+            pending_token: VecDeque::new()
         };
         let mut banner_buffer = String::new();
         while !banner_buffer.starts_with("Welcome") { // Wait for welcome line
@@ -83,78 +76,9 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
         Ok(new_self)
     }
 
-    pub fn set(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>
-    ) -> Result<(), Error> {
-        self.send_command(Command::Set(SetAttributeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
-        }))?;
-        Ok(())
-    }
-
-    pub fn get(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>
-    ) -> Result<OkResponse, Error> {
-        self.send_command(Command::Get(GetAttributeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
-        }))
-    }
-
-    pub fn toggle(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>
-    ) -> Result<(), Error> {
-        self.send_command(Command::Toggle(ToggleAttributeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
-        }))?;
-        Ok(())
-    }
-
-    pub fn increment(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>
-    ) -> Result<(), Error> {
-        self.send_command(Command::Increment(IncrementAttributeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
-        }))?;
-        Ok(())
-    }
-
-    pub fn decrement(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        args: impl IntoIterator<Item = impl Into<String>>
-    ) -> Result<(), Error> {
-        self.send_command(Command::Decrement(DecrementAttributeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            args: args.into_iter().map(|it| it.into()).collect::<Vec<_>>()
-        }))?;
-        Ok(())
-    }
-
     /// Get all available aliases 
     pub fn get_aliases(&mut self) -> Result<HashSet<String>, Error> {
-        let response = self.send_command(Command::GetAliases)?;
+        let response = self.send_command(Command::new_get("SESSION", "aliases", []))?;
         if let OkResponse::WithList(l) = response {
             return Ok(l.into_iter().filter_map(|it| {
                 match it {
@@ -167,70 +91,10 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
         }
     }
 
-    /// Subscribe to an attribute update and returns a channel that publish updates
-    /// Closing this channel will unsubscribe on device
-    /// 
-    /// You **MUST** handle token reception by calling [TesiraSession::dispatch_next_token] regularly
-    pub fn subscribe(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        index: Option<i32>
-    ) -> Result<TesiraSubscription, Error> {
-        self.subscribe_with_optinal_rate(instance_tag, attribute, index, None)
-    }
-
-    /// Subscribe to an attribute update with a minimum rate to avoid overrun
-    /// Returns a channel that publish updates
-    /// Closing this channel will unsubscribe on device
-    /// 
-    /// You **MUST** handle token reception by calling [TesiraSession::dispatch_next_token] regularly
-    pub fn subscribe_with_rate(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        index: Option<i32>,
-        rate: Duration
-    ) -> Result<TesiraSubscription, Error> {
-        self.subscribe_with_optinal_rate(instance_tag, attribute, index, Some(rate))
-    }
-
-    fn subscribe_with_optinal_rate(
-        &mut self,
-        instance_tag: impl Into<String>,
-        attribute: impl Into<String>,
-        index: Option<i32>,
-        rate: Option<Duration>
-    ) -> Result<TesiraSubscription, Error> {
-        let label = format!("Subscription{}", self.next_channel_id);
-        self.next_channel_id += 1;
-
-        let cmd = SubscribeCommand {
-            instance_tag: instance_tag.into(),
-            attribute: attribute.into(),
-            index: index,
-            label: Some(label.clone()),
-            minimum_rate: rate
-        };
-
-        let (sender, receiver) = crossbeam_channel::unbounded();
-        self.channels.insert(label.clone(), ChannelSubscription { sender, subscription: cmd.clone() });
-
-        let response = self.send_command(Command::Subscribe(cmd));
-
-        match response {
-            Ok(_) => return Ok(receiver),
-            Err(e) => {
-                self.channels.remove(&label);
-                return Err(e)
-            }
-        }
-    }
-
     /// Send direct command and await for a response from device
     /// 
     /// See [TesiraSession::set], [TesiraSession::get], [TesiraSession::get_aliases] or [TesiraSession::subscribe]
-    pub fn send_command(&mut self, cmd: impl Into<Command>) -> Result<OkResponse, Error> {
+    pub fn send_command<'a, 'b:'a>(&'a mut self, cmd: impl Into<Command<'b>>) -> Result<OkResponse, Error> {
         let command: Command = cmd.into();
         let cmd_str = format!("{}\n", command.into_ttp());
         self.write_stream.write_all(&cmd_str.as_bytes())?;
@@ -239,7 +103,7 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
             match response {
                 Response::Err(e) => return Err(Error::OperationFailed(e)),
                 Response::Ok(res) => return Ok(res),
-                Response::PublishToken(t) => self.dispatch_token(t),
+                Response::PublishToken(t) => self.pending_token.push_front(t),
             }
         }
     }
@@ -267,36 +131,17 @@ impl<R:Read, W: Write> TesiraSession<R, W> {
     /// and use channels to receive PublishToken in a multithreaded environment
     /// 
     /// Use this method if you subscribed manually and wants to get all Publish tokens in one thread
-    pub fn recv_next_token(&mut self) -> Result<PublishToken, Error> {
+    pub fn recv_token(&mut self) -> Result<PublishToken, Error> {
+        if let Some(pending_token) = self.pending_token.pop_back() {
+            return Ok(pending_token);
+        }
+        
         let response = self.recv_response()?;
         match response {
             Response::PublishToken(t) => 
                 Ok(t),
             r @ ( Response::Err(_) | Response::Ok(_) ) => 
                 Err(Error::UnexpectedResponse(r, "a publish token".to_owned())),
-        }
-    }
-
-    /// Await for next publish token and dispatch it over subscription channels
-    pub fn dispatch_next_token(&mut self) -> Result<(), Error> {
-        let next_token = self.recv_next_token()?;
-        self.dispatch_token(next_token);
-        Ok(())
-    }
-
-    fn dispatch_token(&mut self, token: PublishToken) {
-        let label = token.label.clone();
-        let Entry::Occupied(entry) = self.channels.entry(label.clone()) else {
-            return;
-        };
-
-        let result = entry.get().sender.send(token);
-        
-        if let Err(_) = result {
-            let value = entry.remove();
-            if let Err(e) = self.send_command(Command::Unsubscribe(value.subscription.into())) {
-                eprintln!("Failed to unsubscribe from {}: {}", label, e);
-            }
         }
     }
 }
@@ -313,9 +158,6 @@ pub enum Error {
     UnexpectedResponse(Response, String),
     #[error("Unexpected end of read stream")]
     UnexpectedEnd,
-    #[error("Failed to dispatch publish token")]
-    DispatchFailed(#[from] SendError<PublishToken>),
-
     #[cfg(feature = "ssh")]
     #[error("SSH error: {0}")]
     Ssh(#[from] ssh2::Error)
@@ -332,10 +174,7 @@ mod test {
     use std::{cell::LazyCell, collections::HashSet, io::{BufReader, BufWriter, Cursor, Write}};
 
     #[allow(unused_imports)]
-    use crossbeam_channel::TryRecvError;
-
-    #[allow(unused_imports)]
-    use crate::{proto::{Command, ErrResponse, GetAttributeCommand, OkResponse, PublishToken, SetAttributeCommand, Value}, Error, TesiraSession};
+    use crate::{proto::{Command, ErrResponse, OkResponse, PublishToken, Value}, Error, TesiraSession};
     
     #[allow(dead_code)]
     const WELCOME_BANNER: LazyCell<Vec<u8>> = LazyCell::new(|| "Welcome to the Tesira Text Protocol Server...\n\n".as_bytes().to_vec());
@@ -349,7 +188,7 @@ mod test {
 
         session.read_stream.get_mut().get_mut().extend_from_slice("Level3 set level 2 0\n".as_bytes()); // Should also handle echo
         session.read_stream.get_mut().get_mut().extend_from_slice("+OK\n".as_bytes());
-        session.set("Level3", "level", ["2", "0"]).unwrap();
+        session.send_command(Command::new_set("Level3", "level", [2], 0)).unwrap();
 
         assert_eq!(session.write_stream.into_inner(), "Level3 set level 2 0\n".as_bytes().to_vec());
     }
@@ -364,7 +203,7 @@ mod test {
         
         session.read_stream.get_mut().get_mut().extend_from_slice("Level3 get level 2\n".as_bytes()); // Should also handle echo
         session.read_stream.get_mut().get_mut().extend_from_slice("+OK \"value\":0.000000\n".as_bytes());
-        let response = session.get("Level3", "level", ["2"]).unwrap();
+        let response = session.send_command(Command::new_get("Level3", "level", [2])).unwrap();
         
         assert_eq!(session.write_stream.into_inner(), "Level3 get level 2\n".as_bytes().to_vec());
         assert_eq!(response, OkResponse::WithValue(Value::Number(0.0)));
@@ -417,7 +256,7 @@ mod test {
         
         session.read_stream.get_mut().get_mut().extend_from_slice("Level3 set mute 3 true\n".as_bytes()); // Should also handle echo
         session.read_stream.get_mut().get_mut().extend_from_slice("-ERR address not found: {\"deviceId\":0 \"classCode\":0 \"instanceNum\":0}\n".as_bytes());
-        let response = session.set("Level3", "mute", ["3", "true"]);
+        let response = session.send_command(Command::new_set("Level3", "mute", [3], true));
 
         assert_eq!(session.write_stream.into_inner(), "Level3 set mute 3 true\n".as_bytes().to_vec());
         
@@ -441,40 +280,25 @@ mod test {
         session.read_stream.get_mut().get_mut().extend_from_slice("LogicMeter1 subscribe state 1 Subscription0\n".as_bytes());
         session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":false\n".as_bytes());
         session.read_stream.get_mut().get_mut().extend_from_slice("+OK\n".as_bytes());
-        let receiver = session.subscribe("LogicMeter1", "state", Some(1)).unwrap();
+        let receiver = session.send_command(Command::new_subscribe("LogicMeter1", "state", [1], "Subscription0")).unwrap();
 
         assert_eq!(*session.write_stream.get_ref(), "LogicMeter1 subscribe state 1 Subscription0\n".as_bytes().to_vec());
 
+        assert_eq!(session.recv_token().unwrap(), PublishToken {
+            label: "Subscription0".to_owned(),
+            value: Value::Boolean(false)
+        });
+
         session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":true\n".as_bytes());
-        session.dispatch_next_token().unwrap();
+        assert_eq!(session.recv_token().unwrap(), PublishToken {
+            label: "Subscription0".to_owned(),
+            value: Value::Boolean(true)
+        });
+
         session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":false\n".as_bytes());
-        session.dispatch_next_token().unwrap();
-
-        assert_eq!(receiver.try_recv(), Ok(PublishToken {
+        assert_eq!(session.recv_token().unwrap(), PublishToken {
             label: "Subscription0".to_owned(),
             value: Value::Boolean(false)
-        }));
-
-        assert_eq!(receiver.try_recv(), Ok(PublishToken {
-            label: "Subscription0".to_owned(),
-            value: Value::Boolean(true)
-        }));
-
-        assert_eq!(receiver.try_recv(), Ok(PublishToken {
-            label: "Subscription0".to_owned(),
-            value: Value::Boolean(false)
-        }));
-
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
-
-        session.read_stream.get_mut().get_mut().extend_from_slice("! \"publishToken\":\"Subscription0\" \"value\":true\n".as_bytes());
-        session.dispatch_next_token().unwrap();
-
-        assert_eq!(receiver.try_recv(), Ok(PublishToken {
-            label: "Subscription0".to_owned(),
-            value: Value::Boolean(true)
-        }));
-
-        assert_eq!(receiver.try_recv(), Err(TryRecvError::Empty));
+        });
     }
 }

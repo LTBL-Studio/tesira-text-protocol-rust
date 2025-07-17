@@ -1,6 +1,6 @@
-use std::{io::{stdin, stdout, BufRead, Write}, thread};
+use std::{io::{stdin, stdout, BufRead, Write}};
 
-use tesira_text_protocol::TesiraSession;
+use tesira_text_protocol::{proto::Command, TesiraSession};
 
 fn inquire(what: &str) -> Option<String> {
     print!("{}: ", what);
@@ -26,26 +26,15 @@ fn main() {
     let aliases = session.get_aliases().unwrap();
     println!("Available aliases: {:#?}", aliases);
 
-    let subscription = session.subscribe("AudioMeter1", "level", Some(1))
-        .unwrap();
+    session.send_command(
+        Command::new_subscribe("AudioMeter1", "level", [1], "MySubscription")
+    ).unwrap();
 
     println!("Subscribed to AudioMeter1 level 1");
 
-    thread::spawn(move || {
-        loop {
-            match subscription.recv() {
-                Err(e) => {
-                    println!("Channel closed: {e}");
-                    break;
-                },
-                Ok(t) => println!("Value received: {:?}", t.value)
-            }
-        }
-    });
-
     loop {
-        session.dispatch_next_token()
-            .unwrap()
+        let token = session.recv_token().unwrap();
+        println!("Value received: {:?}", token.value)
     }
 
 }

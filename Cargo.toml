@@ -10,7 +10,6 @@ edition = "2024"
 nom = "8.0"
 thiserror = "2.0"
 ssh2 = { version = "0.9.5", optional = true}
-crossbeam-channel = "0.5.15"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
