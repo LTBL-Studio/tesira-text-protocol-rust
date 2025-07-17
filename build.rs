@@ -153,10 +153,10 @@ fn to_fn_name(prefix: &str, value: &str) -> String {
         .filter(|it| it.is_alphanumeric() || *it == '_')
         .flat_map(|it| it.to_lowercase())
         .collect::<String>();
-    final_value = format!("{}{}", prefix, final_value);
+    final_value = format!("{prefix}{final_value}");
 
     if final_value == "type" {
-        final_value = format!("r#{}", final_value)
+        final_value = format!("r#{final_value}")
     }
     final_value
 }
@@ -204,12 +204,10 @@ fn main() {
         let builder_type = format!("{}CommandBuilder", to_struct_name(&block_name, "Tesira"));
 
         let mut block_builder = Struct::new(&builder_type);
-        block_builder
-            .vis("pub")
-            .doc(&format!(
-                "Operate on block of type {}\n\nBlock type: {}\nBlock group: {}",
-                block_name, block_name, block.group
-            ));
+        block_builder.vis("pub").doc(&format!(
+            "Operate on block of type {}\n\nBlock type: {}\nBlock group: {}",
+            block_name, block_name, block.group
+        ));
 
         let instance_tag_var = if block_name == "Session Services" {
             "\"SESSION\""
@@ -234,15 +232,16 @@ fn main() {
             let builder_fn = builder_impl
                 .new_fn(&builder_fn_name)
                 .arg_self()
-                .doc(format!("Operate on block of type {}", block_name))
+                .doc(format!("Operate on block of type {block_name}"))
                 .ret(builder_type.clone())
                 .vis("pub");
 
             if block_name == "Session Services" || block_name == "Device Services" {
-                builder_fn.line(format!("{}", builder_type));
+                builder_fn.line(builder_type.to_string());
             } else {
-                builder_fn.arg("instance_tag", "impl Into<InstanceTag>")
-                    .line(format!("{}(instance_tag.into())", builder_type));
+                builder_fn
+                    .arg("instance_tag", "impl Into<InstanceTag>")
+                    .line(format!("{builder_type}(instance_tag.into())"));
             }
         }
 
@@ -258,7 +257,7 @@ fn main() {
                 let new_fn: Vec<(Function, Vec<(&'static str, String)>)> = match command {
                     AttributeCommand::Get => {
                         let extra_args: Vec<(&'static str, String)> = Vec::new();
-                        let mut new_fn = Function::new(&to_fn_name("", &attribute.name));
+                        let mut new_fn = Function::new(to_fn_name("", &attribute.name));
                         new_fn
                             .vis("pub")
                             .ret("Command<'static>")
@@ -270,7 +269,7 @@ fn main() {
                     }
                     AttributeCommand::Set => {
                         let mut extra_args: Vec<(&'static str, String)> = Vec::new();
-                        let mut new_fn = Function::new(&to_fn_name("set_", &attribute.name));
+                        let mut new_fn = Function::new(to_fn_name("set_", &attribute.name));
                         new_fn
                             .vis("pub")
                             .ret("Command<'static>")
@@ -290,19 +289,18 @@ fn main() {
 
                                 let discrete_type =
                                     discrete_types.entry(sorted_values).or_insert_with(|| {
-                                        let enum_name = format!(
-                                            "{}",
-                                            to_struct_name(
-                                                &format!(
-                                                    "{} {}",
-                                                    block_name, &attribute.description
-                                                ),
-                                                "Tesira"
-                                            )
-                                        );
+                                        let enum_name = to_struct_name(
+                                            &format!("{} {}", block_name, &attribute.description),
+                                            "Tesira",
+                                        )
+                                        .to_string();
 
                                         let mut new_enum = Enum::new(enum_name.clone());
-                                        new_enum.doc(&format!("Allowed values for {} on {}", attribute.description, block_name))
+                                        new_enum
+                                            .doc(&format!(
+                                                "Allowed values for {} on {}",
+                                                attribute.description, block_name
+                                            ))
                                             .vis("pub")
                                             .allow("missing_docs");
                                         let mut new_enum_impl = Impl::new(enum_name.clone());
@@ -314,10 +312,9 @@ fn main() {
                                             .line("match self {");
 
                                         for variant in values {
-                                            let variant_name = to_struct_name(&variant, &enum_name);
+                                            let variant_name = to_struct_name(variant, &enum_name);
                                             convert_fn.line(format!(
-                                                "\tSelf::{} => \"{}\".to_owned(),",
-                                                variant_name, variant
+                                                "\tSelf::{variant_name} => \"{variant}\".to_owned(),"
                                             ));
                                             new_enum.new_variant(variant_name);
                                         }
@@ -326,7 +323,7 @@ fn main() {
 
                                         scope.push_enum(new_enum);
                                         scope.push_impl(new_enum_impl);
-                                        return enum_name;
+                                        enum_name
                                     });
 
                                 extra_args.push(("value", discrete_type.clone()));
@@ -371,16 +368,22 @@ fn main() {
                         extra_fn
                     }
                     AttributeCommand::Subscribe => {
-                        let mut new_fn = Function::new(&to_fn_name("subscribe_", &attribute.name));
+                        let mut new_fn = Function::new(to_fn_name("subscribe_", &attribute.name));
                         new_fn
                             .vis("pub")
                             .ret("Command<'static>")
-                            .doc(format!("Subscribe to {} value update", attribute.description))
+                            .doc(format!(
+                                "Subscribe to {} value update",
+                                attribute.description
+                            ))
                             .line("Command {")
                             .line("\tcommand: COMMAND_SUBSCRIBE,")
                             .line("\tvalues: vec![subscription_label.into().into_ttp()],");
 
-                        let mut new_fn_rate = Function::new(&format!("{}_with_rate", to_fn_name("subscribe_", &attribute.name)));
+                        let mut new_fn_rate = Function::new(format!(
+                            "{}_with_rate",
+                            to_fn_name("subscribe_", &attribute.name)
+                        ));
                         new_fn_rate
                             .vis("pub")
                             .ret("Command<'static>")
@@ -390,26 +393,36 @@ fn main() {
                             .line("\tvalues: vec![subscription_label.into().into_ttp(), min_rate.as_millis().into_ttp()],");
 
                         vec![
-                            (new_fn, vec![("subscription_label", "impl Into<String>".to_owned())]),
-                            (new_fn_rate, vec![
-                                ("subscription_label", "impl Into<String>".to_owned()),
-                                ("min_rate", "Duration".to_owned())
-                            ])
+                            (
+                                new_fn,
+                                vec![("subscription_label", "impl Into<String>".to_owned())],
+                            ),
+                            (
+                                new_fn_rate,
+                                vec![
+                                    ("subscription_label", "impl Into<String>".to_owned()),
+                                    ("min_rate", "Duration".to_owned()),
+                                ],
+                            ),
                         ]
                     }
                     AttributeCommand::Unsubscribe => {
-                        let mut new_fn = Function::new(&to_fn_name("unsubscribe_", &attribute.name));
+                        let mut new_fn = Function::new(to_fn_name("unsubscribe_", &attribute.name));
                         new_fn
                             .vis("pub")
                             .ret("Command<'static>")
-                            .doc(format!("Subscribe to {} value update", attribute.description))
+                            .doc(format!(
+                                "Subscribe to {} value update",
+                                attribute.description
+                            ))
                             .line("Command {")
                             .line("\tcommand: COMMAND_UNSUBSCRIBE,")
                             .line("\tvalues: vec![subscription_label.into().into_ttp()],");
 
-                        vec![
-                            (new_fn, vec![("subscription_label", "impl Into<String>".to_owned())])
-                        ]
+                        vec![(
+                            new_fn,
+                            vec![("subscription_label", "impl Into<String>".to_owned())],
+                        )]
                     }
                     _ => continue, // TODO
                 };
@@ -417,7 +430,7 @@ fn main() {
                 for (mut new_fn, extra_args) in new_fn.into_iter() {
                     new_fn.line(format!("\tattribute: \"{}\",", attribute.name));
                     new_fn.arg_ref_self();
-                    new_fn.line(format!("\tinstance_tag: {}.to_owned(),", instance_tag_var));
+                    new_fn.line(format!("\tinstance_tag: {instance_tag_var}.to_owned(),"));
 
                     let mut indexes_param = Vec::new();
                     for index in attribute

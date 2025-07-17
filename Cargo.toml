@@ -1,17 +1,15 @@
 [package]
 name = "tesira-text-protocol"
 description = "Implementation of Tesira Text Protocol to communicate with biamp Tesira devices"
-authors = [
-    "Baptiste Saclier <baptiste@plan-valley.com>"
-]
+authors = ["Baptiste Saclier <baptiste@plan-valley.com>"]
 license = "MIT"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
 nom = "8.0"
 thiserror = "2.0"
-ssh2 = { version = "0.9", optional = true}
+ssh2 = { version = "0.9", optional = true }
 chrono = "0.4"
 
 [dev-dependencies]

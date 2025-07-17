@@ -2,18 +2,12 @@
 
 use std::{error::Error, fmt::Display, ops::Deref, time::Duration};
 
-use crate::proto::{InstanceTag, Command, IndexValue, IntoTTP, commands::*};
+use crate::proto::{Command, IndexValue, InstanceTag, IntoTTP, commands::*};
 use chrono::naive::NaiveDateTime;
 
+#[derive(Default)]
 /// Helper to construct valid Tesira Commands
 pub struct CommandBuilder;
-
-impl CommandBuilder {
-    /// Create a new command builder
-    pub fn new() -> Self {
-        CommandBuilder
-    }
-}
 
 /// Value of a delay in Tesira system
 pub enum DelayValue {
@@ -32,8 +26,13 @@ pub enum DelayValue {
 impl IntoTTP for DelayValue {
     fn into_ttp(self) -> String {
         match self {
-            DelayValue::Milliseconds(v) => format!("{{\"units\":Milliseconds \"delay\":{}}}", v.as_millis().into_ttp()),
-            DelayValue::Centimeters(v) => format!("{{\"units\":Centimeters \"delay\":{}}}", v.into_ttp()),
+            DelayValue::Milliseconds(v) => format!(
+                "{{\"units\":Milliseconds \"delay\":{}}}",
+                v.as_millis().into_ttp()
+            ),
+            DelayValue::Centimeters(v) => {
+                format!("{{\"units\":Centimeters \"delay\":{}}}", v.into_ttp())
+            }
             DelayValue::Meters(v) => format!("{{\"units\":Meters \"delay\":{}}}", v.into_ttp()),
             DelayValue::Inches(v) => format!("{{\"units\":Inches \"delay\":{}}}", v.into_ttp()),
             DelayValue::Feet(v) => format!("{{\"units\":Feet \"delay\":{}}}", v.into_ttp()),
@@ -66,13 +65,13 @@ impl IntoTTP for FilterType {
 pub struct FilterSlope(u64);
 
 /// Supported filter slopes
-const VALID_SLOPES: [u64; 8] = [6,12,18,24,30,36,42,48];
+const VALID_SLOPES: [u64; 8] = [6, 12, 18, 24, 30, 36, 42, 48];
 
 impl FilterSlope {
     /// Create a new slope from a value, checking if this slope is supported
     pub fn new(slope: u64) -> Result<FilterSlope, InvalidSlopeError> {
-        if ! VALID_SLOPES.contains(&slope) {
-            return Err(InvalidSlopeError)
+        if !VALID_SLOPES.contains(&slope) {
+            return Err(InvalidSlopeError);
         }
         Ok(Self(slope))
     }
@@ -116,7 +115,11 @@ impl Error for InvalidSlopeError {}
 
 impl Display for InvalidSlopeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Invalid slope, allowed slopes are {}", VALID_SLOPES.map(|it| it.to_string()).join(", "))
+        write!(
+            f,
+            "Invalid slope, allowed slopes are {}",
+            VALID_SLOPES.map(|it| it.to_string()).join(", ")
+        )
     }
 }
 
