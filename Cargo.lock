@@ -384,7 +384,7 @@ dependencies = [
 
 [[package]]
 name = "tesira-text-protocol"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "chrono",
  "codegen",

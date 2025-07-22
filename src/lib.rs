@@ -109,7 +109,6 @@ impl<R: Read, W: Write> TesiraSession<R, W> {
     ) -> Result<OkResponse, Error> {
         let command: Command = cmd.into();
         let cmd_str = format!("{}\n", command.into_ttp());
-        println!("{cmd_str}");
         self.write_stream.write_all(cmd_str.as_bytes())?;
         loop {
             let response = self.recv_response()?;
