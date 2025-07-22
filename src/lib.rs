@@ -11,6 +11,7 @@ pub use proto::Command;
 use std::{
     collections::{HashSet, VecDeque},
     io::{self, BufRead, BufReader, Read, Write},
+    net::ToSocketAddrs,
 };
 
 use thiserror::Error;
@@ -29,12 +30,7 @@ struct SshPassword<'a>(&'a str);
 
 #[cfg(feature = "ssh")]
 impl ssh2::KeyboardInteractivePrompt for SshPassword<'_> {
-    fn prompt<'a>(
-        &mut self,
-        _username: &str,
-        _instructions: &str,
-        _prompts: &[ssh2::Prompt<'a>],
-    ) -> Vec<String> {
+    fn prompt<'a>(&mut self, _: &str, _: &str, _: &[ssh2::Prompt<'a>]) -> Vec<String> {
         vec![self.0.to_owned()]
     }
 }
@@ -42,7 +38,11 @@ impl ssh2::KeyboardInteractivePrompt for SshPassword<'_> {
 #[cfg(feature = "ssh")]
 impl TesiraSession<ssh2::Channel, ssh2::Channel> {
     /// Connect to tesira device over SSH
-    pub fn new_from_ssh(hostname: &str, username: &str, password: &str) -> Result<Self, Error> {
+    pub fn new_from_ssh(
+        hostname: impl ToSocketAddrs,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, Error> {
         let connection = std::net::TcpStream::connect(hostname)?;
 
         let mut ssh = ssh2::Session::new()?;
@@ -109,6 +109,7 @@ impl<R: Read, W: Write> TesiraSession<R, W> {
     ) -> Result<OkResponse, Error> {
         let command: Command = cmd.into();
         let cmd_str = format!("{}\n", command.into_ttp());
+        println!("{cmd_str}");
         self.write_stream.write_all(cmd_str.as_bytes())?;
         loop {
             let response = self.recv_response()?;
